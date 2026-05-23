@@ -3,6 +3,56 @@
 namespace esphome {
 namespace kelon168 {
 
+uint8_t Kelon168Climate::fan_speed_() const {
+  if (!this->fan_mode.has_value()) {
+    return (this->model_ == Kelon168Model::TORNADO)
+               ? KELON168_TORNADO_FAN_AUTO
+               : KELON168_DG11R201_FAN_AUTO;
+  }
+  if (this->model_ == Kelon168Model::TORNADO) {
+    switch (this->fan_mode.value()) {
+      case climate::CLIMATE_FAN_LOW:    return KELON168_TORNADO_FAN_LOW;
+      case climate::CLIMATE_FAN_MEDIUM: return KELON168_TORNADO_FAN_MEDIUM;
+      case climate::CLIMATE_FAN_HIGH:   return KELON168_TORNADO_FAN_HIGH;
+      default:                          return KELON168_TORNADO_FAN_AUTO;
+    }
+  }
+  // DG11R201 (canonical)
+  switch (this->fan_mode.value()) {
+    case climate::CLIMATE_FAN_LOW:    return KELON168_DG11R201_FAN_LOW;
+    case climate::CLIMATE_FAN_MEDIUM: return KELON168_DG11R201_FAN_MEDIUM;
+    case climate::CLIMATE_FAN_HIGH:   return KELON168_DG11R201_FAN_HIGH;
+    default:                          return KELON168_DG11R201_FAN_AUTO;
+  }
+}
+
+uint8_t Kelon168Climate::model_byte_() const {
+  if (this->model_ == Kelon168Model::TORNADO)
+    return KELON168_TORNADO_BYTE18;
+  // DG11R201: On bit reflects current mode.
+  return (this->mode == climate::CLIMATE_MODE_OFF) ? KELON168_DG11R201_BYTE18_OFF
+                                                  : KELON168_DG11R201_BYTE18_ON;
+}
+
+bool Kelon168Climate::decode_fan_(uint8_t raw, climate::ClimateFanMode &out) const {
+  if (this->model_ == Kelon168Model::TORNADO) {
+    switch (raw) {
+      case KELON168_TORNADO_FAN_AUTO:   out = climate::CLIMATE_FAN_AUTO;   return true;
+      case KELON168_TORNADO_FAN_LOW:    out = climate::CLIMATE_FAN_LOW;    return true;
+      case KELON168_TORNADO_FAN_MEDIUM: out = climate::CLIMATE_FAN_MEDIUM; return true;
+      case KELON168_TORNADO_FAN_HIGH:   out = climate::CLIMATE_FAN_HIGH;   return true;
+      default: return false;
+    }
+  }
+  switch (raw) {
+    case KELON168_DG11R201_FAN_AUTO:   out = climate::CLIMATE_FAN_AUTO;   return true;
+    case KELON168_DG11R201_FAN_LOW:    out = climate::CLIMATE_FAN_LOW;    return true;
+    case KELON168_DG11R201_FAN_MEDIUM: out = climate::CLIMATE_FAN_MEDIUM; return true;
+    case KELON168_DG11R201_FAN_HIGH:   out = climate::CLIMATE_FAN_HIGH;   return true;
+    default: return false;
+  }
+}
+
 void Kelon168Climate::build_packet_(uint8_t *pkt, uint8_t cmd) {
   memset(pkt, 0, KELON168_STATE_LEN);
 
@@ -35,8 +85,8 @@ void Kelon168Climate::build_packet_(uint8_t *pkt, uint8_t cmd) {
   // Byte 16: Fan2 (MSB of 3-bit fan speed)
   pkt[16] = ((speed >> 2) & 0x01) << 1;
 
-  // Byte 18: model / remote-ID bytes (fixed)
-  pkt[18] = KELON168_MODEL_BYTE;
+  // Byte 18: model identifier (+ On bit on DG11R201)
+  pkt[18] = model_byte_();
 
   // Checksums
   pkt[KELON168_SUM1_BYTE] = xor_bytes_(pkt, 2, 11);   // XOR bytes 2–12
@@ -142,14 +192,11 @@ bool Kelon168Climate::on_receive(remote_base::RemoteReceiveData data) {
     default: return false;
   }
 
-  // Fan
-  switch (fan_raw) {
-    case KELON168_FAN_AUTO:   this->fan_mode = climate::CLIMATE_FAN_AUTO; break;
-    case KELON168_FAN_LOW:    this->fan_mode = climate::CLIMATE_FAN_LOW; break;
-    case KELON168_FAN_MEDIUM: this->fan_mode = climate::CLIMATE_FAN_MEDIUM; break;
-    case KELON168_FAN_HIGH:   this->fan_mode = climate::CLIMATE_FAN_HIGH; break;
-    default: return false;
-  }
+  // Fan (model-dependent decode)
+  climate::ClimateFanMode decoded_fan;
+  if (!decode_fan_(fan_raw, decoded_fan))
+    return false;
+  this->fan_mode = decoded_fan;
 
   // Temperature
   if (temp >= KELON168_MIN_TEMP && temp <= KELON168_MAX_TEMP)

@@ -29,12 +29,29 @@ static const uint8_t KELON168_MODE_COOL  = 2;
 static const uint8_t KELON168_MODE_DRY   = 3;
 static const uint8_t KELON168_MODE_FAN   = 4;
 
-// ── Fan speed constants (3-bit, split across byte 2 [low 2] and byte 16 [high 1]) ──
-static const uint8_t KELON168_FAN_AUTO   = 0;
-static const uint8_t KELON168_FAN_LOW    = 3;
-static const uint8_t KELON168_FAN_MEDIUM = 2;
-static const uint8_t KELON168_FAN_HIGH   = 1;
-static const uint8_t KELON168_FAN_MAX    = 4;
+// ── Fan speed codes (3-bit, split across byte 2 [low 2] + byte 16 [high 1]) ──
+//
+// TORNADO variant (reverse-engineered):
+static const uint8_t KELON168_TORNADO_FAN_AUTO   = 0;
+static const uint8_t KELON168_TORNADO_FAN_HIGH   = 1;
+static const uint8_t KELON168_TORNADO_FAN_MEDIUM = 2;
+static const uint8_t KELON168_TORNADO_FAN_LOW    = 3;
+//
+// DG11R201 variant (canonical IRremoteESP8266 reference):
+static const uint8_t KELON168_DG11R201_FAN_AUTO   = 0;
+static const uint8_t KELON168_DG11R201_FAN_MIN    = 1;
+static const uint8_t KELON168_DG11R201_FAN_LOW    = 2;
+static const uint8_t KELON168_DG11R201_FAN_MEDIUM = 3;
+static const uint8_t KELON168_DG11R201_FAN_HIGH   = 4;
+static const uint8_t KELON168_DG11R201_FAN_MAX    = 5;
+
+// ── Byte 18 (model identifier + "On" bit) ─────────────────────────────────
+//   TORNADO:  captured as 0x00 (the unit ignores Model1/On/Model2)
+//   DG11R201: Model1=8, Model2=1, On bit set when AC is on
+//             → 0x38 (on) / 0x28 (off)
+static const uint8_t KELON168_TORNADO_BYTE18      = 0x00;
+static const uint8_t KELON168_DG11R201_BYTE18_OFF = 0x28;  // Model1=8, Model2=1, On=0
+static const uint8_t KELON168_DG11R201_BYTE18_ON  = 0x38;  // Model1=8, Model2=1, On=1
 
 // ── Command byte (byte 15) ────────────────────────────────────────────────
 static const uint8_t KELON168_CMD_POWER  = 0x01;
@@ -42,14 +59,21 @@ static const uint8_t KELON168_CMD_TEMP   = 0x02;
 static const uint8_t KELON168_CMD_MODE   = 0x06;
 static const uint8_t KELON168_CMD_FAN    = 0x11;
 
-// ── Temperature range ─────────────────────────────────────────────────────
+// ── Temperature range (protocol max: 16–32 °C; clamped to ESPHome-conservative 18–30) ──
 static const uint8_t KELON168_MIN_TEMP = 18;
 static const uint8_t KELON168_MAX_TEMP = 30;
 
-// ── Model byte (byte 18) – from unit-test known-good packet ──────────────
-//    Model1=8, On=1, Model2=1 → 0b0011_1000 = 0x38
-//    If your remote sends a different value, adjust this constant.
-static const uint8_t KELON168_MODEL_BYTE = 0x00;
+// ── Remote/AC model variants ──────────────────────────────────────────────
+//   TORNADO  — reverse-engineered from a Tornado-branded 168-bit Kelon unit
+//              (the only variant we've actually validated). Fan codes and
+//              byte 18 differ from the upstream reference.
+//   DG11R201 — canonical encoding per IRremoteESP8266's ir_Kelon.cpp. Also
+//              reportedly used by Kelon RCH-R0Y3 and Hisense AST-09UW4RVETG00A.
+//              Included for completeness; not field-tested by us.
+enum class Kelon168Model : uint8_t {
+  TORNADO  = 0,
+  DG11R201 = 1,
+};
 
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -68,6 +92,8 @@ class Kelon168Climate : public climate_ir::ClimateIR {
             // Swing modes
             {climate::CLIMATE_SWING_OFF, climate::CLIMATE_SWING_VERTICAL}) {}
 
+  void set_model(Kelon168Model model) { this->model_ = model; }
+
  protected:
   void transmit_state() override;
   bool on_receive(remote_base::RemoteReceiveData data) override;
@@ -80,16 +106,15 @@ class Kelon168Climate : public climate_ir::ClimateIR {
     return result;
   }
 
-  uint8_t fan_speed_() const {
-    if (!this->fan_mode.has_value())
-      return KELON168_FAN_AUTO;
-    switch (this->fan_mode.value()) {
-      case climate::CLIMATE_FAN_LOW:    return KELON168_FAN_LOW;
-      case climate::CLIMATE_FAN_MEDIUM: return KELON168_FAN_MEDIUM;
-      case climate::CLIMATE_FAN_HIGH:   return KELON168_FAN_HIGH;
-      default:                          return KELON168_FAN_AUTO;
-    }
-  }
+  // Map current ClimateFanMode -> raw 3-bit fan code per active model.
+  uint8_t fan_speed_() const;
+
+  // Byte 18 (model identifier + On bit) per active model.
+  uint8_t model_byte_() const;
+
+  // Decode raw 3-bit fan code -> ClimateFanMode per active model.
+  // Returns false on an unknown code for the current model.
+  bool decode_fan_(uint8_t raw, climate::ClimateFanMode &out) const;
 
   uint8_t ac_mode_() const {
     switch (this->mode) {
@@ -126,6 +151,7 @@ class Kelon168Climate : public climate_ir::ClimateIR {
   climate::ClimateMode      last_mode_{climate::CLIMATE_MODE_OFF};
   optional<climate::ClimateFanMode> last_fan_{};
   float                     last_temp_{24.0f};
+  Kelon168Model             model_{Kelon168Model::TORNADO};
 };
 
 }  // namespace kelon168
