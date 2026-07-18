@@ -2,18 +2,18 @@
 
 ESPHome external components.
 
-## kelon168
+## tornado
 
-Climate (IR) component for AC units that use the 168-bit Kelon protocol family —
-notably **Tornado**-branded split units, with optional support for the canonical
-Kelon DG11R2-01 encoding. The wire protocol (timing, framing, checksums) is the
-168-bit variant documented in [IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266)
-(`ir_Kelon.cpp`), distinct from the shorter 48-bit Kelon protocol that already
-ships with ESPHome.
+Climate (IR) component for **Tornado**-branded split AC units. The wire protocol
+(timing, framing, checksums) was built on the 168-bit Kelon protocol documented in
+[IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266) (`ir_Kelon.cpp`)
+as an implementation base — the existing remote whose header timings best matched
+the signals captured from the real Tornado remote — then adapted and validated
+against those captured signals. It is distinct from the shorter 48-bit Kelon
+protocol that already ships with ESPHome.
 
-The Tornado encoding was reverse-engineered from a real remote and diverges from
-the upstream reference in fan-speed code mapping and the byte-18 ("model" / "On")
-value. Both variants are selectable via the `model:` config option below.
+The encoding (fan-speed code mapping, byte-18 value) was matched to a real Tornado
+remote and validated on real hardware.
 
 Supports:
 
@@ -23,8 +23,8 @@ Supports:
 - Target temperature 18–30 °C
 - Both transmit and receive (state sync from physical remote)
 
-Not yet implemented (Kelon protocol features present in upstream but not ported):
-sleep, super/turbo, light, on-/off-timers, iFeel, Swing2, fan min/max speeds.
+Not yet implemented: sleep, super/turbo, light, on-/off-timers, iFeel, Swing2,
+fan min/max speeds.
 
 ### Usage
 
@@ -37,7 +37,7 @@ external_components:
       type: git
       url: https://github.com/Genesys225/esphome-components
       ref: main
-    components: [kelon168]
+    components: [tornado]
 
 remote_transmitter:
   pin: GPIO4
@@ -50,18 +50,10 @@ remote_receiver:
   dump: raw
 
 climate:
-  - platform: kelon168
+  - platform: tornado
     name: "Living Room AC"
-    model: tornado                            # default; or "dg11r201"
     receiver_id: !secret remote_receiver_id   # optional, omit if no receiver
 ```
-
-### `model:` option
-
-| Value      | Description |
-|------------|-------------|
-| `tornado`  | **(default)** Reverse-engineered from a Tornado-branded 168-bit Kelon unit. The only variant validated on real hardware. Fan codes are remapped (`Low=3, Med=2, High=1`) and byte 18 is always `0x00`. |
-| `dg11r201` | Canonical 168-bit Kelon encoding per IRremoteESP8266's `ir_Kelon.cpp`. Also reportedly used by Kelon RCH-R0Y3 and Hisense AST-09UW4RVETG00A. Fan codes follow the protocol spec (`Low=2, Med=3, High=4`) and byte 18 includes the `On` bit (`0x38` when on, `0x28` when off). **Not field-tested by this component's author** — if you have one of these remotes and try it, please open an issue with results. |
 
 ### Notes
 
